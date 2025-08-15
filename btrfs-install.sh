@@ -61,6 +61,8 @@ else
   echo -e "${GREEN}Ethernet selected, skipping Wi-Fi setup.${NC}"
 fi
 
+clear
+
 # DRIVE PARTITIONING
 printf "${PURPLE}========== Partition Your Drives ==========${NC}\n"
 
@@ -96,22 +98,61 @@ done
 # SELECT FILE SYSTEMS FOR DRIVES
 printf "${PURPLE}========== Choose Your Filesystems ==========${NC}\n"
 
-#BOOT PARTITION
+# BOOT PARTITION
 lsblk
 printf "${CYAN}%-35s${NC}" "Enter your boot partition (e.g. /dev/nvme0n1p1): "
 read BOOT_PARTITION
 
-if [[ -b "/dev/$BOOT_PARTITION" ]]; then
-  mkfs.fat -F 32 "$BOOT_PARTITION"
-  mount "$BOOT_PARTITION" /mnt/boot
-  echo -e "${GREEN}Drive successfully formatted and mounted.${NC}"
-  printf "${CYAN}Press [Enter] to continue...${NC}"
-else
-  echo -e "${RED}Invalid drive. Please try again.${NC}"
-  printf "${CYAN}Press [Enter] to continue...${NC}"
-  read
-  lsblk
+while true; do
+  if [[ -b "/dev/$BOOT_PARTITION" ]]; then
+    mkfs.fat -F 32 "$BOOT_PARTITION"
+    mount "$BOOT_PARTITION" /mnt/boot
+    echo -e "${GREEN}Drive successfully formatted and mounted.${NC}"
+    printf "${CYAN}Press [Enter] to continue...${NC}"
+  else
+    echo -e "${RED}Invalid drive. Please try again.${NC}"
+    printf "${CYAN}Press [Enter] to continue...${NC}"
+    read
+    lsblk
+  fi
+done
+
+# ROOT PARTITION
+printf "${CYAN}Enter your root partition (e.g. /dev/nvme0n1p2): ${NC}"
+read ROOT_PARTITION
+
+while true; do
+  if [[ -b "/dev/$ROOT_PARTITION" ]]; then
+    printf "${CYAN}Format as 'btrfs' or 'ext4'?: ${NC}"
+    read ROOT_FORMAT
+    if [[ "$ROOT_FORMAT" =~ ^[btrfs]$ ]]; then
+      pacman -S btrfs-progs
+      mkfs.btrfs -L root "$ROOT_PARTITION"
+      mount "$ROOT_PARTITION" /mnt/root
+      echo -e "${GREEN}Drive successfully formatted and mounted.${NC}"
+    elif [[ "$ROOT_FORMAT" =~ ^[ext4]$ ]]; then
+      mkfs.ext4 "$ROOT_PARTITION"
+      mount "$ROOT_PARTITION" /mnt/root
+      echo -e "${GREEN}Drive successfully formatted and mounted.${NC}"
+    else
+      echo -e "${RED}Invalid format. Please try again.${NC}"
+      printf "${CYAN}Press [Enter] to continue...${NC}"
+      read
+    fi
+  fi
+done
+
+printf "${CYAN}Do you want SWAP? (y/n): ${NC}"
+read SWAP_YES_NO
+
+# ENABLE SWAP
+if [[ "SWAP_YES_NO" =~ ^[Yy]$ ]] && [[ "ROOT_FORMAT" =~ ^[btrfs]$ ]]; then
+  printf "${CYAN}How much ram do you have? (e.g. '4g'): ${NC}"
+  read RAM_AMOUNT
+
+  echo -e "${GREEN}OK enabling SWAP...${NC}"
+  btrfs subvolume create /swap
+  btrfs filesystem mkswapfile --size "$RAM_AMOUNT" --uuid clear /swap/swapfile
 fi
 
-#ROOT PARTITION
 
