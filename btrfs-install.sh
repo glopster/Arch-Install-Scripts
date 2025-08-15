@@ -96,19 +96,22 @@ done
 # SELECT FILE SYSTEMS FOR DRIVES
 printf "${PURPLE}========== Choose Your Filesystems ==========${NC}\n"
 
-while true; do
+#BOOT PARTITION
+lsblk
+printf "${CYAN}%-35s${NC}" "Enter your boot partition (e.g. /dev/nvme0n1p1): "
+read BOOT_PARTITION
 
+if [[ -b "/dev/$BOOT_PARTITION" ]]; then
+  mkfs.fat -F 32 "$BOOT_PARTITION"
+  mount "$BOOT_PARTITION" /mnt/boot
+  echo -e "${GREEN}Drive successfully formatted and mounted.${NC}"
+  printf "${CYAN}Press [Enter] to continue...${NC}"
+else
+  echo -e "${RED}Invalid drive. Please try again.${NC}"
+  printf "${CYAN}Press [Enter] to continue...${NC}"
+  read
   lsblk
-  printf "${CYAN}%-35s${NC}" "Enter your boot partition."
-  read BOOT_PARTITION
-  
-  mkfs.
+fi
 
-done
-
-
-# DRIVE MOUNTING
-printf "${PURPLE}========== Mount Your Drives ==========${NC}\n"
-
-
+#ROOT PARTITION
 
