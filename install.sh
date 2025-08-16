@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+# ----- Colors -----
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
 PURPLE='\033[0;35m'
@@ -9,7 +11,6 @@ clear
 
 # --- WIFI SETUP ---
 printf "${PURPLE}========== Wifi Setup ==========${NC}\n"
-
 printf "${CYAN}%-35s${NC}" "Are you using ethernet? (y/n): "
 read USING_ETHERNET
 
@@ -20,7 +21,7 @@ if [[ "$USING_ETHERNET" =~ ^[Nn]$ ]]; then
   printf "${CYAN}Choose network interface: ${NC}"
   read NETWORK_INTERFACE
 
-  echo -e "${GREEN}Showing available networks...${NC}\n"
+  echo -e "${GREEN}Scanning for networks...${NC}\n"
   iwctl station "$NETWORK_INTERFACE" scan
   iwctl station "$NETWORK_INTERFACE" get-networks
 
@@ -59,14 +60,13 @@ fi
 cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.backup
 pacman -Sy --noconfirm pacman-contrib
 rankmirrors -n 6 /etc/pacman.d/mirrorlist.backup > /etc/pacman.d/mirrorlist
-sleep 2
 
 # --- DRIVE PARTITIONING ---
 printf "${PURPLE}========== Partition Your Drives ==========${NC}\n"
-printf "${CYAN}%-35s${NC}" "Would you like to partition your drives? (y/n): "
+printf "${CYAN}Would you like to partition your drives? (y/n): ${NC}"
 read PARTITION_CHOICE
-
 lsblk
+
 if [[ "$PARTITION_CHOICE" =~ ^[Yy]$ ]]; then
   while true; do
     printf "${CYAN}Which drive would you like to partition? (or 'q' to cancel): ${NC}"
@@ -86,20 +86,12 @@ if [[ "$PARTITION_CHOICE" =~ ^[Yy]$ ]]; then
   done
 fi
 
+
 # --- FILESYSTEMS ---
 printf "${PURPLE}========== Choose Your Filesystems ==========${NC}\n"
 lsblk
 
-# BOOT
-printf "${CYAN}Enter your boot partition (e.g. /dev/nvme0n1p1): ${NC}"
-read BOOT_PARTITION
-if [[ -b "$BOOT_PARTITION" ]]; then
-  mkfs.fat -F 32 "$BOOT_PARTITION"
-  mkdir -p /mnt/boot
-  mount "$BOOT_PARTITION" /mnt/boot
-fi
-
-# ROOT
+# ROOT (mount this FIRST)
 printf "${CYAN}Enter your root partition (e.g. /dev/nvme0n1p2): ${NC}"
 read ROOT_PARTITION
 if [[ -b "$ROOT_PARTITION" ]]; then
@@ -107,32 +99,67 @@ if [[ -b "$ROOT_PARTITION" ]]; then
   read ROOT_FORMAT
   if [[ "$ROOT_FORMAT" == "btrfs" ]]; then
     pacman -S --noconfirm btrfs-progs
+
+    echo -e "${GREEN}Formatting root partition as Btrfs...${NC}"
     mkfs.btrfs -L root "$ROOT_PARTITION"
+
+    echo -e "${GREEN}Creating subvolumes...${NC}"
     mount "$ROOT_PARTITION" /mnt
+    btrfs subvolume create /mnt/@
+    btrfs subvolume create /mnt/@home
+    btrfs subvolume create /mnt/@log
+    btrfs subvolume create /mnt/@cache
+    btrfs subvolume create /mnt/@tmp
+    btrfs subvolume create /mnt/@.snapshots
+    umount /mnt
+
+    echo -e "${GREEN}Mounting subvolumes...${NC}"
+    mount -o subvol=@,compress=zstd,noatime "$ROOT_PARTITION" /mnt
+    mkdir -p /mnt/{home,var/log,var/cache,var/tmp,.snapshots}
+
+    mount -o subvol=@home,compress=zstd,noatime "$ROOT_PARTITION" /mnt/home
+    mount -o subvol=@log,compress=zstd,noatime "$ROOT_PARTITION" /mnt/var/log
+    mount -o subvol=@cache,compress=zstd,noatime "$ROOT_PARTITION" /mnt/var/cache
+    mount -o subvol=@tmp,compress=zstd,noatime "$ROOT_PARTITION" /mnt/var/tmp
+    mount -o subvol=@.snapshots,compress=zstd,noatime "$ROOT_PARTITION" /mnt/.snapshots
+
   elif [[ "$ROOT_FORMAT" == "ext4" ]]; then
     mkfs.ext4 "$ROOT_PARTITION"
     mount "$ROOT_PARTITION" /mnt
+  else
+    echo -e "${RED}Unknown format. Exiting.${NC}"; exit 1
   fi
+else
+  echo -e "${RED}Root partition not found. Exiting.${NC}"; exit 1
+fi
+
+# BOOT (mount after root)
+printf "${CYAN}Enter your boot partition (e.g. /dev/nvme0n1p1): ${NC}"
+read BOOT_PARTITION
+if [[ -b "$BOOT_PARTITION" ]]; then
+  mkfs.fat -F 32 "$BOOT_PARTITION"
+  mkdir -p /mnt/boot
+  mount "$BOOT_PARTITION" /mnt/boot
+else
+  echo -e "${RED}Boot partition not found. Exiting.${NC}"; exit 1
 fi
 
 # --- SWAP ---
 printf "${CYAN}Do you want SWAP? (y/n): ${NC}"
 read SWAP_YES_NO
-
 if [[ "$SWAP_YES_NO" =~ ^[Yy]$ ]]; then
   if [[ "$ROOT_FORMAT" == "btrfs" ]]; then
-    printf "${CYAN}How much RAM (MB)? e.g. 4096: ${NC}"
+    printf "${CYAN}Swap size in MB (e.g. 4096): ${NC}"
     read RAM_AMOUNT
+    mkdir -p /mnt/swap
     btrfs subvolume create /mnt/@swap
-    mount -o subvol=@swap "$ROOT_PARTITION" /mnt/swap
-    chattr +C /mnt/swap
-    truncate -s 0 /mnt/swap/swapfile
-    dd if=/dev/zero of=/mnt/swap/swapfile bs=1M count="$RAM_AMOUNT" status=progress
-    chmod 0600 /mnt/swap/swapfile
-    mkswap /mnt/swap/swapfile
-    swapon /mnt/swap/swapfile
-  elif [[ "$ROOT_FORMAT" == "ext4" ]]; then
-    printf "${CYAN}How much RAM (GB)? e.g. 4G: ${NC}"
+    chattr +C /mnt/@swap
+    dd if=/dev/zero of=/mnt/@swap/swapfile bs=1M count="$RAM_AMOUNT" status=progress
+    chmod 600 /mnt/@swap/swapfile
+    mkswap /mnt/@swap/swapfile
+    swapon /mnt/@swap/swapfile
+  else
+    printf "${CYAN}Swap size (e.g. 4G): ${NC}"
     read RAM_AMOUNT
     fallocate -l "$RAM_AMOUNT" /mnt/swapfile
     chmod 600 /mnt/swapfile
@@ -142,78 +169,124 @@ if [[ "$SWAP_YES_NO" =~ ^[Yy]$ ]]; then
 fi
 
 # --- INSTALL BASE ---
-pacstrap -K --noconfirm /mnt base linux linux-firmware base-devel
+EXTRA_PKGS=()
+[[ "$ROOT_FORMAT" == "btrfs" ]] && EXTRA_PKGS+=(btrfs-progs)
+pacstrap -K /mnt base linux linux-firmware base-devel networkmanager "${EXTRA_PKGS[@]}"
 
 # --- FSTAB ---
 genfstab -U /mnt >> /mnt/etc/fstab
-
-# Add swap entry if needed
 if [[ "$SWAP_YES_NO" =~ ^[Yy]$ ]]; then
   if [[ "$ROOT_FORMAT" == "btrfs" ]]; then
-    echo '/swap/swapfile none swap defaults 0 0' >> /mnt/etc/fstab
-  elif [[ "$ROOT_FORMAT" == "ext4" ]]; then
-    echo '/swapfile none swap sw 0 0' >> /mnt/etc/fstab
+    echo '/@swap/swapfile none swap defaults 0 0' >> /mnt/etc/fstab
+  else
+    echo '/swapfile none swap defaults 0 0' >> /mnt/etc/fstab
   fi
 fi
 
-# ADD EXTRA DRIVES TO FSTAB
+# --- Additional Drives ---
 printf "${PURPLE}========== Additional Drive Setup ==========${NC}\n"
-
 while true; do
-  printf "${CYAN}Would you like to add another drive to fstab? (y/n): ${NC}"
+  printf "${CYAN}Add another drive to fstab? (y/n): ${NC}"
   read ADD_DRIVE
+  [[ "$ADD_DRIVE" =~ ^[Nn]$ ]] && break
 
-  if [[ "$ADD_DRIVE" =~ ^[Nn]$ ]]; then
-    echo -e "${GREEN}Skipping additional drives setup.${NC}"
-    break
-  fi
-
-  echo -e "${GREEN}Available drives:${NC}"
   lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT
-
   printf "${CYAN}Enter the partition (e.g. sdb1): ${NC}"
   read DRIVE_PART
+  [[ ! -b "/dev/$DRIVE_PART" ]] && { echo -e "${RED}Invalid partition.${NC}"; continue; }
 
-  if [[ ! -b "/dev/$DRIVE_PART" ]]; then
-    echo -e "${RED}Invalid partition. Please try again.${NC}"
-    continue
-  fi
-
-  printf "${CYAN}Enter filesystem type (ext4, xfs, btrfs, ntfs, vfat, etc.): ${NC}"
+  printf "${CYAN}Filesystem type: ${NC}"
   read FS_TYPE
-
-  printf "${CYAN}Enter mount point (e.g. /mnt/data): ${NC}"
+  printf "${CYAN}Mount point (e.g. /mnt/data): ${NC}"
   read MOUNT_POINT
+  [[ ! -d "/mnt$MOUNT_POINT" ]] && mkdir -p "/mnt$MOUNT_POINT"
 
-  # create mount point if it doesn’t exist
-  if [[ ! -d "$MOUNT_POINT" ]]; then
-    mkdir -p "$MOUNT_POINT"
-    echo -e "${GREEN}Created mount point at $MOUNT_POINT${NC}"
-  fi
-
-  printf "${CYAN}Enter mount options (press enter for defaults): ${NC}"
+  printf "${CYAN}Mount options [defaults]: ${NC}"
   read MOUNT_OPTS
   [[ -z "$MOUNT_OPTS" ]] && MOUNT_OPTS="defaults"
 
   UUID=$(blkid -s UUID -o value "/dev/$DRIVE_PART")
+  [[ -z "$UUID" ]] && { echo -e "${RED}UUID lookup failed.${NC}"; continue; }
 
-  if [[ -z "$UUID" ]]; then
-    echo -e "${RED}Could not retrieve UUID for /dev/$DRIVE_PART. Skipping...${NC}"
-    continue
-  fi
-
-  echo "UUID=$UUID  $MOUNT_POINT  $FS_TYPE  $MOUNT_OPTS  0  2" >> /etc/fstab
-  echo -e "${GREEN}Added /dev/$DRIVE_PART to /etc/fstab.${NC}"
-
+  echo "UUID=$UUID  $MOUNT_POINT  $FS_TYPE  $MOUNT_OPTS  0  2" >> /mnt/etc/fstab
 done
 
-# TEST FSTAB MOUNTS
-echo -e "${CYAN}Testing fstab entries with 'mount -a'...${NC}"
-if mount -a; then
-  echo -e "${GREEN}All drives mounted successfully!${NC}"
+# Test fstab **inside** target system
+echo -e "${CYAN}Testing fstab inside target with 'mount -a'...${NC}"
+arch-chroot /mnt mount -a && \
+  echo -e "${GREEN}All target mounts succeeded.${NC}" || \
+  echo -e "${RED}Some target mounts failed. Check /mnt/etc/fstab.${NC}"
+
+# --- CHROOT CONFIG (no heredocs; run step-by-step) ---
+# Locale + time + hwclock
+arch-chroot /mnt bash -c 'echo "LANG=en_US.UTF-8" > /etc/locale.conf'
+arch-chroot /mnt bash -c "sed -i 's/^#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen"
+arch-chroot /mnt ln -sf /usr/share/zoneinfo/America/Los_Angeles /etc/localtime
+arch-chroot /mnt hwclock --systohc
+
+# Hostname
+while true; do
+  printf "${CYAN}Computer hostname: ${NC}"
+  read COMPUTER_NAME
+  printf "${CYAN}Re-enter hostname: ${NC}"
+  read COMPUTER_NAME_2
+  if [[ "$COMPUTER_NAME" == "$COMPUTER_NAME_2" ]]; then
+    echo "$COMPUTER_NAME" | arch-chroot /mnt tee /etc/hostname >/dev/null
+    break
+  else
+    echo -e "${RED}Hostnames do not match. Try again.${NC}"
+  fi
+done
+
+# Enable services
+arch-chroot /mnt systemctl enable fstrim.timer || true
+arch-chroot /mnt systemctl enable NetworkManager
+
+# Root password
+echo -e "${CYAN}Set root password (inside chroot).${NC}"
+arch-chroot /mnt passwd
+
+# User account
+while true; do
+  printf "${CYAN}New username: ${NC}"
+  read USER_NAME
+  printf "${CYAN}Re-enter username: ${NC}"
+  read USER_NAME_2
+  if [[ "$USER_NAME" == "$USER_NAME_2" ]]; then
+    arch-chroot /mnt useradd -m -G wheel,storage,power -s /bin/bash "$USER_NAME"
+    echo -e "${CYAN}Set password for ${USER_NAME}.${NC}"
+    arch-chroot /mnt passwd "$USER_NAME"
+    break
+  else
+    echo -e "${RED}Usernames do not match. Try again.${NC}"
+  fi
+done
+
+# Sudoers: enable wheel and require root password
+arch-chroot /mnt bash -c "sed -i '/%wheel ALL=(ALL:ALL) ALL/s/^# //' /etc/sudoers"
+arch-chroot /mnt bash -c "grep -q '^Defaults rootpw' /etc/sudoers || echo 'Defaults rootpw' >> /etc/sudoers"
+
+# --- GRUB Bootloader (UEFI/BIOS) ---
+printf "${PURPLE}========== Bootloader Setup (GRUB) ==========${NC}\n"
+arch-chroot /mnt pacman -S --noconfirm grub efibootmgr os-prober mtools
+
+# Determine disk that holds the root partition (for BIOS GRUB)
+ROOT_DISK=$(lsblk -no pkname "$ROOT_PARTITION")
+if [[ -d /sys/firmware/efi/efivars ]]; then
+  echo -e "${GREEN}UEFI detected. Installing GRUB (EFI)...${NC}"
+  arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 else
-  echo -e "${RED}One or more drives failed to mount. Please check your /etc/fstab entries.${NC}"
+  echo -e "${GREEN}BIOS detected. Installing GRUB (MBR) on /dev/${ROOT_DISK}...${NC}"
+  arch-chroot /mnt grub-install --target=i386-pc "/dev/${ROOT_DISK}"
 fi
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+echo -e "${GREEN}GRUB installed.${NC}"
 
-echo -e "${GREEN}Installation steps completed. Check /mnt/etc/fstab for accuracy and use post-install.sh for system configuration.${NC}"
-
+echo -e "${GREEN}Installation complete! You can now 'arch-chroot /mnt' for any extras, or reboot.${NC}"
+printf "${CYAN}Reboot now? (y/n): ${NC}"
+read REBOOT_ANS
+if [[ "$REBOOT_ANS" =~ ^[Yy]$ ]]; then
+  umount -R /mnt || true
+  echo -e "${GREEN}Rebooting...${NC}"
+  reboot
+fi
