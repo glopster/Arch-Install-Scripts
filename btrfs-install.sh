@@ -132,7 +132,7 @@ while true; do
       echo -e "${GREEN}Drive successfully formatted and mounted.${NC}"
     elif [[ "$ROOT_FORMAT" =~ ^[ext4]$ ]]; then
       mkfs.ext4 "$ROOT_PARTITION"
-      mount "$ROOT_PARTITION" /mnt/root
+      mount "$ROOT_PARTITION" /mnt
       echo -e "${GREEN}Drive successfully formatted and mounted.${NC}"
     else
       echo -e "${RED}Invalid format. Please try again.${NC}"
@@ -147,12 +147,24 @@ read SWAP_YES_NO
 
 # ENABLE SWAP
 if [[ "SWAP_YES_NO" =~ ^[Yy]$ ]] && [[ "ROOT_FORMAT" =~ ^[btrfs]$ ]]; then
-  printf "${CYAN}How much ram do you have? (e.g. '4g'): ${NC}"
+  printf "${CYAN}How much ram do you have in megabytes? (e.g. '4096'): ${NC}"
   read RAM_AMOUNT
 
   echo -e "${GREEN}OK enabling SWAP...${NC}"
-  btrfs subvolume create /swap
-  btrfs filesystem mkswapfile --size "$RAM_AMOUNT" --uuid clear /swap/swapfile
+  btrfs subvolume create /mnt/@swap
+  unmount /mnt/
+  mount -o subvol=@swap "$ROOT_PARTITION" /mnt/swap
+  chattr +C /mnt/swap
+  truncate -s 0 /mnt/swap/swapfile
+  dd if=/dev/zero of=/mnt/swap/swapfile bs=1M count="RAM_AMOUNT" status=progress
+  btrfs property set /mnt/swap/swapfile compression none
+  chmod 0600 /mnt/swap/swapfile
+  mkswap /mnt/swap/swapfile
+  swapon /mnt/swap/swapfile
 fi
 
+
+# CREATE FSTAB
+# genfstab -U /mnt >> /mnt/etc/fstab
+# echo '/swap/swapfile none swap defaults 0 0' >> /mnt/etc/fstab
 
