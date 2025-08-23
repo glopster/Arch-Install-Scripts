@@ -168,6 +168,17 @@ if [[ "$SWAP_YES_NO" =~ ^[Yy]$ ]]; then
   fi
 fi
 
+# --- ENABLE MULTILIB ---
+echo -e "${PURPLE}========== Enabling multilib repo ==========${NC}"
+arch-chroot /mnt bash -c "
+  if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
+    sed -i '/^\#\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
+    echo 'Multilib repo enabled.'
+  else
+    echo 'Multilib already enabled.'
+  fi
+  pacman -Sy --noconfirm
+"
 # --- INSTALL BASE ---
 EXTRA_PKGS=()
 [[ "$ROOT_FORMAT" == "btrfs" ]] && EXTRA_PKGS+=(btrfs-progs)
